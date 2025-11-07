@@ -10,13 +10,10 @@ function normalizeBasePath(raw) {
     const withoutTrailing = withoutLeading.replace(/\/+$/, "");
     return withoutTrailing ? `/${withoutTrailing}` : "";
 }
-const HARDCODED_BASE_PATH = normalizeBasePath("/pokemonscout") || "/pokemonscout";
-const HARDCODED_BASE_URL = "https://flixnest.app/pokemonscout";
-const HARDCODED_PORT = 4000;
 export const APP_CONFIG = {
-    port: HARDCODED_PORT,
-    baseUrl: HARDCODED_BASE_URL,
-    basePath: HARDCODED_BASE_PATH,
+    port: parseInt(process.env.PORT ?? "4000", 10),
+    baseUrl: process.env.BASE_URL ?? `http://localhost:${process.env.PORT ?? "4000"}`,
+    basePath: normalizeBasePath(process.env.BASE_PATH ?? ""),
     metagames: {
         baseUrl: process.env.METAGAMES_BASE_URL ??
             "https://www.metagames.hu/gyujtogetos-kartyajatekok/pokemon-tcg/termekek",
