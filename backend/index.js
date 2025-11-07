@@ -1,17 +1,20 @@
 import "./logger.js"; // MUST be first to capture all logs
 import express from "express";
 import cors from "cors";
+import cookieParser from "cookie-parser";
 import cron from "node-cron";
 import { z } from "zod";
 import fs from "fs";
 import path from "path";
 import { APP_CONFIG } from "./config.js";
-import { migrate, closeDatabase } from "./db.js";
+import { migrate, closeDatabase, db } from "./db.js";
 import { listProducts, getProduct } from "./repositories/productRepo.js";
-import { createAlert } from "./repositories/alertRepo.js";
+import { createAlert, listAlertsForUser, updateAlert, deleteAlert } from "./repositories/alertRepo.js";
 import { primeScraper, runStoreScrape, describeSchedule } from "./services/scraperService.js";
 import { listStores } from "./repositories/storeRepo.js";
 import { getLogs, clearLogs } from "./logger.js";
+import { createUser, verifyUserPassword, getUserCount, listUsers } from "./repositories/userRepo.js";
+import { generateToken, requireAuth, requireAdmin, optionalAuth } from "./utils/authMiddleware.js";
 async function bootstrap() {
     migrate();
     primeScraper()
@@ -30,10 +33,78 @@ async function bootstrap() {
         console.warn(`[SERVER] Frontend build not found at ${frontendDir}. Run "npm run build" before starting the server.`);
     }
     const app = express();
-    app.use(cors());
+    app.use(cors({
+        origin: true,
+        credentials: true,
+    }));
+    app.use(cookieParser());
     app.use(express.json());
     // Create API router to mount under basePath
     const apiRouter = express.Router();
+    // ===== Authentication Endpoints =====
+    apiRouter.post("/api/auth/register", (req, res) => {
+        const schema = z.object({
+            email: z.string().email(),
+            password: z.string().min(6),
+        });
+        const parsed = schema.safeParse(req.body);
+        if (!parsed.success) {
+            res.status(400).json({ error: parsed.error.flatten() });
+            return;
+        }
+        try {
+            const user = createUser({
+                email: parsed.data.email,
+                password: parsed.data.password,
+            });
+            const token = generateToken(user);
+            res.cookie("token", token, {
+                httpOnly: true,
+                secure: process.env.NODE_ENV === "production",
+                maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
+            });
+            res.status(201).json({ user, token });
+        }
+        catch (error) {
+            res.status(400).json({ error: error.message });
+        }
+    });
+    apiRouter.post("/api/auth/login", (req, res) => {
+        const schema = z.object({
+            email: z.string().email(),
+            password: z.string(),
+        });
+        const parsed = schema.safeParse(req.body);
+        if (!parsed.success) {
+            res.status(400).json({ error: parsed.error.flatten() });
+            return;
+        }
+        try {
+            const user = verifyUserPassword(parsed.data.email, parsed.data.password);
+            if (!user) {
+                res.status(401).json({ error: "Invalid email or password" });
+                return;
+            }
+            const token = generateToken(user);
+            res.cookie("token", token, {
+                httpOnly: true,
+                secure: process.env.NODE_ENV === "production",
+                maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
+            });
+            res.json({ user, token });
+        }
+        catch (error) {
+            res.status(500).json({ error: error.message });
+        }
+    });
+    apiRouter.post("/api/auth/logout", (_req, res) => {
+        res.clearCookie("token");
+        res.json({ ok: true });
+    });
+    apiRouter.get("/api/auth/me", requireAuth, (req, res) => {
+        res.json({ user: req.user });
+    });
+    // ===== Public Endpoints =====
     apiRouter.get("/api/stores", (_req, res) => {
         res.json({ stores: listStores() });
     });
@@ -87,10 +158,19 @@ async function bootstrap() {
         }
         res.json({ product });
     });
-    apiRouter.post("/api/alerts", (req, res) => {
+    // ===== User Dashboard Endpoints (Protected) =====
+    apiRouter.get("/api/user/alerts", requireAuth, (req, res) => {
+        try {
+            const alerts = listAlertsForUser(req.user.id);
+            res.json({ alerts });
+        }
+        catch (error) {
+            res.status(500).json({ error: error.message });
+        }
+    });
+    apiRouter.post("/api/user/alerts", requireAuth, (req, res) => {
         const schema = z.object({
             productId: z.string().min(1),
-            email: z.string().email(),
             targetPriceHuf: z.number().int().positive().optional(),
             notifyOnInStock: z.boolean().optional(),
             notifyOnRestock: z.boolean().optional(),
@@ -101,10 +181,10 @@ async function bootstrap() {
             return;
         }
         try {
-            const { productId, email, targetPriceHuf, notifyOnInStock, notifyOnRestock } = parsed.data;
+            const { productId, targetPriceHuf, notifyOnInStock, notifyOnRestock } = parsed.data;
             const alert = createAlert({
                 productId,
-                email,
+                userId: req.user.id,
                 ...(targetPriceHuf !== undefined ? { targetPriceHuf } : {}),
                 ...(notifyOnInStock !== undefined ? { notifyOnInStock } : {}),
                 ...(notifyOnRestock !== undefined ? { notifyOnRestock } : {}),
@@ -115,30 +195,81 @@ async function bootstrap() {
             res.status(400).json({ error: error.message });
         }
     });
-    apiRouter.post("/api/scrape", async (req, res) => {
+    apiRouter.put("/api/user/alerts/:id", requireAuth, (req, res) => {
+        const schema = z.object({
+            targetPriceHuf: z.number().int().positive().optional(),
+            notifyOnInStock: z.boolean().optional(),
+            notifyOnRestock: z.boolean().optional(),
+        });
+        const parsed = schema.safeParse(req.body);
+        if (!parsed.success) {
+            res.status(400).json({ error: parsed.error.flatten() });
+            return;
+        }
+        try {
+            const alert = updateAlert(req.params.id, req.user.id, parsed.data);
+            res.json({ alert });
+        }
+        catch (error) {
+            res.status(400).json({ error: error.message });
+        }
+    });
+    apiRouter.delete("/api/user/alerts/:id", requireAuth, (req, res) => {
+        try {
+            deleteAlert(req.params.id, req.user.id);
+            res.json({ ok: true });
+        }
+        catch (error) {
+            res.status(400).json({ error: error.message });
+        }
+    });
+    // ===== Admin Dashboard Endpoints (Admin Only) =====
+    apiRouter.get("/api/admin/stats", requireAuth, requireAdmin, (_req, res) => {
+        try {
+            const userCount = getUserCount();
+            const alertCount = db
+                .prepare("SELECT COUNT(*) as count FROM price_alerts WHERE active = 1")
+                .get().count;
+            const productCount = db.prepare("SELECT COUNT(*) as count FROM products").get().count;
+            res.json({
+                stats: {
+                    totalUsers: userCount,
+                    totalAlerts: alertCount,
+                    totalProducts: productCount,
+                },
+            });
+        }
+        catch (error) {
+            res.status(500).json({ error: error.message });
+        }
+    });
+    apiRouter.get("/api/admin/users", requireAuth, requireAdmin, (req, res) => {
+        try {
+            const limit = parseInt(req.query.limit) || 50;
+            const offset = parseInt(req.query.offset) || 0;
+            const users = listUsers({ limit, offset });
+            const total = getUserCount();
+            res.json({ users, total });
+        }
+        catch (error) {
+            res.status(500).json({ error: error.message });
+        }
+    });
+    apiRouter.post("/api/admin/scrape", requireAuth, requireAdmin, async (req, res) => {
         const schema = z.object({ storeSlug: z.string().min(1).optional() });
         const parsed = schema.safeParse(req.body ?? {});
         if (!parsed.success) {
             res.status(400).json({ error: parsed.error.flatten() });
             return;
         }
-        console.log(`[API] POST /api/scrape - storeSlug: ${parsed.data.storeSlug ?? 'ALL'}`);
+        console.log(`[API] POST /api/admin/scrape - storeSlug: ${parsed.data.storeSlug ?? 'ALL'} - triggered by admin ${req.user.email}`);
         try {
             await runStoreScrape(parsed.data.storeSlug);
-            console.log(`[API] POST /api/scrape - SUCCESS`);
-            res.json({ ok: true });
+            console.log(`[API] POST /api/admin/scrape - SUCCESS`);
+            res.json({ ok: true, message: "Scrape completed successfully" });
         }
         catch (error) {
-            console.error(`[API] POST /api/scrape - ERROR:`, error);
-            res.status(500).json({ error: error.message ?? "scrape failed" });
-        }
-    });
-    apiRouter.post("/api/scrape/metagames", async (_req, res) => {
-        try {
-            await runStoreScrape("metagames");
-            res.json({ ok: true });
-        }
-        catch (error) {
+            console.error(`[API] POST /api/admin/scrape - ERROR:`, error);
             res.status(500).json({ error: error.message ?? "scrape failed" });
         }
     });
