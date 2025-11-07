@@ -1,4 +1,4 @@
-import { db } from "./backend/db.js";
+import { db, flushDatabase } from "./backend/db.js";
 
 const email = process.argv[2];
 
@@ -16,5 +16,8 @@ if (user) {
 } else {
   console.log("User not found");
 }
+
+// Ensure changes are written to disk
+flushDatabase();
 
 process.exit(0);
