@@ -4,25 +4,37 @@ A web application for monitoring Pokemon Trading Card Game (TCG) products from H
 
 ## Features
 
+### 👤 User Authentication & Management
+- **Secure Registration & Login**: JWT-based authentication with bcrypt password hashing
+- **Personal Dashboard**: Manage your alerts and profile in one place
+- **Admin Panel**: System statistics, user management, and manual scrape triggers
+- **Role-Based Access**: Admin and regular user roles with protected endpoints
+
 ### 🛍️ Multi-Store Monitoring
 Track products from multiple Hungarian Pokemon TCG retailers:
 - **Metagames** (metagames.hu)
 - **TCGBolt** (tcgbolt.hu)
 - **Varázslatos Játékok** (varazslatosjatekok.hu)
 
-### 📧 Smart Email Alerts
-Create customizable alerts with three trigger types:
+### 📧 Smart Email Alerts (User-Based)
+Create and manage personalized alerts from your dashboard:
 - **Price Target Alerts**: Get notified when a product drops to your target price
 - **In-Stock Alerts**: Be the first to know when a product becomes available
 - **Restock Alerts**: Get notified when out-of-stock items come back
+- **Edit & Delete**: Full control over your alert settings
+- **Alert History**: Track when you were last notified
 
 ### 🔄 Automated Scraping
 - Scheduled automatic updates (every 30 minutes by default)
-- Manual scraping on-demand via API
+- Manual scraping on-demand via admin panel
 - Price history tracking
 - Stock status monitoring
+- Admin-controlled scrape triggers
 
 ### 🌐 Web Interface
+- **Public Product Browser**: Browse products without login
+- **User Dashboard**: Personal alert management after login
+- **Admin Dashboard**: System stats and control panel
 - Search products by name
 - Filter by store or stock status
 - View current prices and availability
@@ -102,6 +114,9 @@ BASE_URL=http://localhost:4000   # Application base URL
 ### Optional Variables
 
 ```bash
+# Authentication
+JWT_SECRET=change-this-to-a-random-secret-in-production
+
 # Scraper Configuration
 SCRAPER_CRON=*/30 * * * *   # Run every 30 minutes
 SCRAPER_CONCURRENCY=2        # Number of concurrent requests
@@ -121,7 +136,42 @@ METAGAMES_PAGE_LIMIT=        # Limit pages to scrape
 
 ## API Documentation
 
-### Products
+### Authentication
+
+**Register**
+```http
+POST /api/auth/register
+Content-Type: application/json
+
+{
+  "email": "user@example.com",
+  "password": "securepassword123"
+}
+```
+
+**Login**
+```http
+POST /api/auth/login
+Content-Type: application/json
+
+{
+  "email": "user@example.com",
+  "password": "securepassword123"
+}
+```
+
+**Get Current User**
+```http
+GET /api/auth/me
+Authorization: Bearer <token>
+```
+
+**Logout**
+```http
+POST /api/auth/logout
+```
+
+### Products (Public)
 
 **List Products**
 ```http
@@ -140,19 +190,69 @@ Query parameters:
 GET /api/products/:id
 ```
 
-### Alerts
+### User Alerts (Protected - Requires Authentication)
+
+**List My Alerts**
+```http
+GET /api/user/alerts
+Authorization: Bearer <token>
+```
 
 **Create Alert**
 ```http
-POST /api/alerts
+POST /api/user/alerts
+Authorization: Bearer <token>
 Content-Type: application/json
 
 {
   "productId": "product-123",
-  "email": "user@example.com",
   "targetPriceHuf": 5000,
   "notifyOnInStock": true,
   "notifyOnRestock": true
+}
+```
+
+**Update Alert**
+```http
+PUT /api/user/alerts/:id
+Authorization: Bearer <token>
+Content-Type: application/json
+
+{
+  "targetPriceHuf": 4500,
+  "notifyOnInStock": false,
+  "notifyOnRestock": true
+}
+```
+
+**Delete Alert**
+```http
+DELETE /api/user/alerts/:id
+Authorization: Bearer <token>
+```
+
+### Admin (Protected - Requires Admin Role)
+
+**Get System Statistics**
+```http
+GET /api/admin/stats
+Authorization: Bearer <token>
+```
+
+**List All Users**
+```http
+GET /api/admin/users?limit=50&offset=0
+Authorization: Bearer <token>
+```
+
+**Trigger Manual Scrape**
+```http
+POST /api/admin/scrape
+Authorization: Bearer <token>
+Content-Type: application/json
+
+{
+  "storeSlug": "metagames"  // Optional: specific store or omit for all
 }
 ```
 

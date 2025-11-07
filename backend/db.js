@@ -133,6 +133,17 @@ class DatabaseWrapper {
 }
 export const db = new DatabaseWrapper(sqlite);
 export function migrate() {
+    const createUsers = `
+    CREATE TABLE IF NOT EXISTS users (
+      id TEXT PRIMARY KEY,
+      email TEXT NOT NULL UNIQUE,
+      password_hash TEXT NOT NULL,
+      is_admin INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS users_email_idx ON users(email);
+  `;
     const createStores = `
     CREATE TABLE IF NOT EXISTS stores (
       id TEXT PRIMARY KEY,
@@ -187,7 +198,7 @@ export function migrate() {
     CREATE TABLE IF NOT EXISTS price_alerts (
       id TEXT PRIMARY KEY,
       product_id TEXT NOT NULL,
-      email TEXT NOT NULL,
+      user_id TEXT NOT NULL,
       target_price_huf INTEGER,
       notify_on_in_stock INTEGER NOT NULL DEFAULT 1,
       notify_on_restock INTEGER NOT NULL DEFAULT 1,
@@ -198,11 +209,23 @@ export function migrate() {
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at TEXT NOT NULL DEFAULT (datetime('now')),
       FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE CASCADE,
-      UNIQUE(product_id, email)
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+      UNIQUE(product_id, user_id)
     );
-    CREATE INDEX IF NOT EXISTS price_alerts_email_idx ON price_alerts(email);
+    CREATE INDEX IF NOT EXISTS price_alerts_user_idx ON price_alerts(user_id);
+    CREATE INDEX IF NOT EXISTS price_alerts_product_idx ON price_alerts(product_id);
   `;
+    // Migration: Check if we need to recreate price_alerts table with user_id
+    const checkUserIdColumn = db.prepare("PRAGMA table_info(price_alerts)").all();
+    const hasUserId = checkUserIdColumn.some((col) => col.name === "user_id");
+    if (checkUserIdColumn.length > 0 && !hasUserId) {
+        console.log("[MIGRATION] Recreating price_alerts table with user_id support");
+        db.exec(`
+      DROP TABLE IF EXISTS price_alerts;
+    `);
+    }
     db.exec([
+        createUsers,
         createStores,
         createProducts,
         createProductIndexes,
